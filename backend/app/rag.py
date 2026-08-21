@@ -21,43 +21,105 @@ def extract_text_from_pdf(file: UploadFile) -> str:
 
 
 def detect_language(question: str) -> str:
-    """Detect whether the user is asking in English, Hindi or Hinglish."""
+    """Detect English, Hindi or Hinglish."""
 
-    q = question.lower()
+    q = question.lower().strip()
 
-    hindi_words = [
+    hindi_words = {
         "क्या", "क्यों", "कैसे", "बताओ", "बताइए",
         "कहानी", "का", "की", "के", "में", "है",
         "मुझे", "और", "से", "यह"
-    ]
+    }
 
-    hinglish_words = [
+    hinglish_words = {
         "kya", "kyu", "kyon", "kaise", "btao", "batao",
         "bta", "story", "iska", "iski", "iske",
-        "me", "mein", "hai", "h", "mujhe", "or",
-        "aur", "btao", "krke", "wala", "wali"
-    ]
+        "me", "mein", "hai", "mujhe", "or",
+        "aur", "krke", "wala", "wali"
+    }
 
-    if any(word in q for word in hindi_words):
-        if any(word in q for word in hinglish_words):
-            return "hinglish"
+    # Hindi script
+    has_hindi = any(
+        word in q for word in hindi_words
+    )
+
+    # Roman words
+    words = set(re.findall(r"\b[a-zA-Z]+\b", q))
+
+    has_hinglish = bool(words.intersection(hinglish_words))
+
+    if has_hindi and has_hinglish:
+        return "hinglish"
+
+    if has_hindi:
         return "hindi"
 
-    if any(word in q for word in hinglish_words):
+    if has_hinglish:
         return "hinglish"
 
     return "english"
 
 
-def find_relevant_context(text: str, question: str, max_chunks: int = 5) -> str:
-    """Find only the most relevant parts of the PDF."""
+def find_relevant_context(
+    text: str,
+    question: str,
+    max_chunks: int = 6
+) -> str:
+    """
+    Find the most relevant PDF sections.
 
-    question_words = set(
+    Important:
+    Common question words like what/how/why are ignored.
+    Actual topic words such as stack, queue, tree etc.
+    receive much higher importance.
+    """
+
+    # Convert question into useful words
+    question_words = [
         word.lower()
         for word in re.findall(r"\b[a-zA-Z0-9]+\b", question)
         if len(word) > 2
-    )
+    ]
 
+    # Words that should NOT be used for matching
+    stop_words = {
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "how",
+        "does",
+        "did",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "this",
+        "that",
+        "tell",
+        "give",
+        "explain",
+        "please",
+        "about",
+        "can",
+        "you",
+        "me",
+        "for",
+        "from",
+        "with",
+        "and",
+        "or"
+    }
+
+    useful_words = [
+        word for word in question_words
+        if word not in stop_words
+    ]
+
+    # Split PDF into paragraphs
     paragraphs = [
         p.strip()
         for p in re.split(r"\n\s*\n", text)
@@ -68,45 +130,85 @@ def find_relevant_context(text: str, question: str, max_chunks: int = 5) -> str:
 
     for paragraph in paragraphs:
 
+        paragraph_lower = paragraph.lower()
+
         paragraph_words = set(
             word.lower()
-            for word in re.findall(r"\b[a-zA-Z0-9]+\b", paragraph)
+            for word in re.findall(
+                r"\b[a-zA-Z0-9]+\b",
+                paragraph
+            )
         )
 
-        score = len(question_words.intersection(paragraph_words))
+        score = 0
 
-        # Give extra importance to important question words
-        important_words = [
-            "moral",
-            "lesson",
+        # Strong match for actual question/topic words
+        for word in useful_words:
+
+            if word in paragraph_words:
+                score += 10
+
+            # Exact phrase/substring match
+            if word in paragraph_lower:
+                score += 5
+
+        # Extra boost for definition questions
+        definition_words = {
+            "define",
+            "definition",
             "meaning",
-            "summary",
-            "main",
-            "why",
-            "how",
             "what"
-        ]
+        }
 
-        for word in important_words:
-            if word in question.lower() and word in paragraph.lower():
-                score += 3
+        if any(
+            word in question.lower()
+            for word in definition_words
+        ):
+
+            definition_patterns = [
+                " is ",
+                " are ",
+                "defined as",
+                "refers to",
+                "means",
+                "called"
+            ]
+
+            if any(
+                pattern in paragraph_lower
+                for pattern in definition_patterns
+            ):
+                score += 5
 
         if score > 0:
             scored.append((score, paragraph))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # Highest relevance first
+    scored.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
 
-    if not scored:
-        return text[:12000]
+    # If relevant context found
+    if scored:
 
-    return "\n\n".join(
-        paragraph for _, paragraph in scored[:max_chunks]
-    )[:12000]
+        selected = [
+            paragraph
+            for _, paragraph in scored[:max_chunks]
+        ]
+
+        return "\n\n".join(selected)[:12000]
+
+    # If nothing matches, send limited PDF context
+    return text[:12000]
 
 
-def get_answer_from_text(text: str, question: str) -> str:
+def get_answer_from_text(
+    text: str,
+    question: str
+) -> str:
     """
-    Generate a short answer from the uploaded PDF
+    Generate a focused answer from the uploaded PDF
     using Gemini AI.
     """
 
@@ -116,56 +218,75 @@ def get_answer_from_text(text: str, question: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
-        return "AI service is not configured. Please add GEMINI_API_KEY in Render."
+        return (
+            "AI service is not configured. "
+            "Please add GEMINI_API_KEY in Render."
+        )
 
     language = detect_language(question)
 
-    context = find_relevant_context(text, question)
+    context = find_relevant_context(
+        text,
+        question
+    )
 
     language_instruction = {
-        "english": "Answer only in English.",
-        "hindi": "Answer only in Hindi using Devanagari script.",
-        "hinglish": "Answer in natural Hinglish using Roman English letters."
+        "english": (
+            "Answer only in English."
+        ),
+        "hindi": (
+            "Answer only in Hindi using Devanagari script."
+        ),
+        "hinglish": (
+            "Answer in natural Hinglish using "
+            "Roman English letters."
+        )
     }[language]
 
     prompt = f"""
 You are StudyRAG-AI, a PDF question-answering assistant.
 
-Your job is to answer ONLY what the user asked.
+Your job is to answer ONLY the user's question
+using the provided PDF context.
 
 STRICT RULES:
 
-1. Use ONLY the information available in the provided PDF context.
-2. Do NOT retell the whole story.
-3. Do NOT include unrelated stories or paragraphs.
-4. Do NOT repeat the PDF title unless it is necessary.
-5. Give a direct and natural answer.
-6. Keep the answer short and focused.
-7. If the user asks for 2 lines, give approximately 2 lines.
-8. If the user asks for a moral, give only the moral.
-9. If the user asks for a definition, give only the definition.
-10. If the answer is not available in the PDF, clearly say that it is not available.
-11. Match the user's language exactly:
-   {language_instruction}
-12. Never start with phrases like:
-   "According to the PDF..."
-   "The PDF says..."
-   "Five Short Stories..."
-   unless the user specifically asks about the PDF.
-13. Never add information from your own knowledge.
+1. Use ONLY information available in the PDF context.
+2. Answer the exact question asked.
+3. Do NOT answer a different question.
+4. Do NOT retell the whole PDF.
+5. Do NOT include unrelated stories.
+6. Do NOT include unrelated paragraphs.
+7. Do NOT repeat the PDF title unless necessary.
+8. Keep the answer short and focused.
+9. If the user asks a definition, give the definition only.
+10. If the user asks "What is X?", explain ONLY X.
+11. If the user asks for a moral, give ONLY the moral.
+12. If the user asks for a summary, summarize ONLY the requested content.
+13. If the answer cannot be found in the provided PDF context,
+    clearly say that the information is not available in the PDF.
+14. Never invent information from your own knowledge.
+15. Match the user's language:
+    {language_instruction}
+
+IMPORTANT:
+The context below may contain multiple unrelated sections.
+You MUST select only the information relevant to the user's
+exact question.
 
 PDF CONTEXT:
-----------------
+-------------------------
 {context}
-----------------
+-------------------------
 
 USER QUESTION:
 {question}
 
-Now give ONLY the final answer.
+Return ONLY the final answer.
 """
 
     try:
+
         url = (
             "https://generativelanguage.googleapis.com/v1beta/"
             "models/gemini-2.5-flash:generateContent"
@@ -188,7 +309,7 @@ Now give ONLY the final answer.
                     }
                 ],
                 "generationConfig": {
-                    "temperature": 0.2,
+                    "temperature": 0.1,
                     "maxOutputTokens": 300
                 }
             },
@@ -205,12 +326,27 @@ Now give ONLY the final answer.
                 )
             )
 
+        candidates = data.get("candidates", [])
+
+        if not candidates:
+            return "AI ne koi answer generate nahi kiya."
+
         answer = (
-            data["candidates"][0]["content"]["parts"][0]["text"]
+            candidates[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
             .strip()
         )
+
+        if not answer:
+            return "AI ne koi answer generate nahi kiya."
 
         return answer
 
     except Exception as error:
-        return f"AI answer generate nahi ho paya: {str(error)}"
+
+        return (
+            f"AI answer generate nahi ho paya: "
+            f"{str(error)}"
+)
