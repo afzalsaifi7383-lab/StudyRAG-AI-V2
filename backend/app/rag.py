@@ -1,14 +1,12 @@
 import os
 import re
-from typing import Optional
-
+import requests
 from fastapi import UploadFile
 from pypdf import PdfReader
 
 
 def extract_text_from_pdf(file: UploadFile) -> str:
     """Extract readable text from uploaded PDF."""
-
     reader = PdfReader(file.file)
 
     pages = []
@@ -25,32 +23,40 @@ def extract_text_from_pdf(file: UploadFile) -> str:
 def detect_language(question: str) -> str:
     """Detect whether the user is asking in English, Hindi or Hinglish."""
 
-    q = question.lower().strip()
+    q = question.lower()
 
-    # Hindi Devanagari
-    if re.search(r"[\u0900-\u097F]", question):
-        return "hindi"
-
-    hinglish_words = [
-        "kya", "ka", "ki", "ke", "hai", "h", "tha", "thi",
-        "btao", "batao", "kyu", "kyun", "kaise", "kis",
-        "me", "mein", "se", "ko", "or", "aur", "ye", "wo",
-        "moral", "story", "wali", "wala", "iska", "iski",
-        "iske", "mujhe", "bht", "bahut", "samjhao", "samjha"
+    hindi_words = [
+        "क्या", "क्यों", "कैसे", "बताओ", "बताइए",
+        "कहानी", "का", "की", "के", "में", "है",
+        "मुझे", "और", "से", "यह"
     ]
 
-    words = set(re.findall(r"[a-zA-Z]+", q))
+    hinglish_words = [
+        "kya", "kyu", "kyon", "kaise", "btao", "batao",
+        "bta", "story", "iska", "iski", "iske",
+        "me", "mein", "hai", "h", "mujhe", "or",
+        "aur", "btao", "krke", "wala", "wali"
+    ]
 
-    hinglish_count = len(words.intersection(hinglish_words))
+    if any(word in q for word in hindi_words):
+        if any(word in q for word in hinglish_words):
+            return "hinglish"
+        return "hindi"
 
-    if hinglish_count >= 1:
+    if any(word in q for word in hinglish_words):
         return "hinglish"
 
     return "english"
 
 
-def find_relevant_paragraphs(text: str, question: str):
-    """Find the most relevant parts of the PDF."""
+def find_relevant_context(text: str, question: str, max_chunks: int = 5) -> str:
+    """Find only the most relevant parts of the PDF."""
+
+    question_words = set(
+        word.lower()
+        for word in re.findall(r"\b[a-zA-Z0-9]+\b", question)
+        if len(word) > 2
+    )
 
     paragraphs = [
         p.strip()
@@ -58,209 +64,153 @@ def find_relevant_paragraphs(text: str, question: str):
         if p.strip()
     ]
 
-    if not paragraphs:
-        return []
-
-    question_words = {
-        word.lower()
-        for word in re.findall(r"[a-zA-Z]+", question)
-        if len(word) > 2
-    }
-
     scored = []
 
     for paragraph in paragraphs:
+
         paragraph_words = set(
-            re.findall(r"[a-zA-Z]+", paragraph.lower())
+            word.lower()
+            for word in re.findall(r"\b[a-zA-Z0-9]+\b", paragraph)
         )
 
         score = len(question_words.intersection(paragraph_words))
 
-        scored.append((score, paragraph))
+        # Give extra importance to important question words
+        important_words = [
+            "moral",
+            "lesson",
+            "meaning",
+            "summary",
+            "main",
+            "why",
+            "how",
+            "what"
+        ]
 
-    scored.sort(reverse=True, key=lambda x: x[0])
-
-    # Only relevant paragraphs
-    relevant = [
-        paragraph
-        for score, paragraph in scored
-        if score > 0
-    ]
-
-    return relevant[:5]
-
-
-def extract_moral(text: str) -> Optional[str]:
-    """
-    Try to extract a moral/lesson from a story.
-    This prevents returning the whole story when user asks for its moral.
-    """
-
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-
-    moral_keywords = [
-        "moral",
-        "lesson",
-        "learned",
-        "honesty",
-        "honest",
-        "truth",
-        "truthful",
-        "reward",
-        "rewarded",
-        "kindness",
-        "helping",
-        "greed",
-        "greedy",
-        "never lie",
-        "always tell the truth"
-    ]
-
-    candidates = []
-
-    for sentence in sentences:
-        lower = sentence.lower()
-
-        score = 0
-
-        for keyword in moral_keywords:
-            if keyword in lower:
-                score += 1
+        for word in important_words:
+            if word in question.lower() and word in paragraph.lower():
+                score += 3
 
         if score > 0:
-            candidates.append((score, sentence.strip()))
+            scored.append((score, paragraph))
 
-    candidates.sort(reverse=True, key=lambda x: x[0])
+    scored.sort(key=lambda x: x[0], reverse=True)
 
-    if candidates:
-        return candidates[0][1]
+    if not scored:
+        return text[:12000]
 
-    return None
-
-
-def answer_moral(question: str, text: str, language: str) -> str:
-    """Return a short answer when the user asks for moral/lesson."""
-
-    moral = extract_moral(text)
-
-    if language == "hindi":
-        if moral:
-            return f"इस कहानी की सीख है कि हमेशा ईमानदार और सच्चा रहना चाहिए।"
-
-        return "इस कहानी की सीख है कि ईमानदारी और सच्चाई हमेशा अच्छी होती है।"
-
-    if language == "hinglish":
-        if moral:
-            return "Is story ka moral hai ki hamesha honest aur sachcha rehna chahiye."
-
-        return "Is story ka moral hai ki hamesha imaandari aur sachchai ka saath dena chahiye."
-
-    # English
-    if moral:
-        return "The moral of the story is that we should always be honest and truthful."
-
-    return "The moral of the story is that honesty and truthfulness are always valuable."
+    return "\n\n".join(
+        paragraph for _, paragraph in scored[:max_chunks]
+    )[:12000]
 
 
 def get_answer_from_text(text: str, question: str) -> str:
     """
-    Main RAG answer function.
-
-    Gives a short, relevant answer instead of returning
-    multiple unrelated PDF paragraphs.
+    Generate a short answer from the uploaded PDF
+    using Gemini AI.
     """
 
     if not text.strip():
-        return "I couldn't find readable information in the PDF."
+        return "PDF me readable text nahi mila."
 
-    question = question.strip()
+    api_key = os.getenv("GEMINI_API_KEY")
 
-    if not question:
-        return "Please ask a question about the uploaded PDF."
+    if not api_key:
+        return "AI service is not configured. Please add GEMINI_API_KEY in Render."
 
     language = detect_language(question)
 
-    q = question.lower()
+    context = find_relevant_context(text, question)
 
-    # --------------------------------------------------
-    # MORAL / LESSON QUESTIONS
-    # --------------------------------------------------
+    language_instruction = {
+        "english": "Answer only in English.",
+        "hindi": "Answer only in Hindi using Devanagari script.",
+        "hinglish": "Answer in natural Hinglish using Roman English letters."
+    }[language]
 
-    moral_words = [
-        "moral",
-        "lesson",
-        "moral kya",
-        "seekh",
-        "sikh",
-        "sikh kya",
-        "what is the moral",
-        "what's the moral",
-        "main lesson",
-        "main message"
-    ]
+    prompt = f"""
+You are StudyRAG-AI, a PDF question-answering assistant.
 
-    if any(word in q for word in moral_words):
-        return answer_moral(question, text, language)
+Your job is to answer ONLY what the user asked.
 
-    # --------------------------------------------------
-    # SUMMARY QUESTIONS
-    # --------------------------------------------------
+STRICT RULES:
 
-    summary_words = [
-        "summary",
-        "summarize",
-        "summarise",
-        "short summary",
-        "saar",
-        "saransh",
-        "short me batao"
-    ]
+1. Use ONLY the information available in the provided PDF context.
+2. Do NOT retell the whole story.
+3. Do NOT include unrelated stories or paragraphs.
+4. Do NOT repeat the PDF title unless it is necessary.
+5. Give a direct and natural answer.
+6. Keep the answer short and focused.
+7. If the user asks for 2 lines, give approximately 2 lines.
+8. If the user asks for a moral, give only the moral.
+9. If the user asks for a definition, give only the definition.
+10. If the answer is not available in the PDF, clearly say that it is not available.
+11. Match the user's language exactly:
+   {language_instruction}
+12. Never start with phrases like:
+   "According to the PDF..."
+   "The PDF says..."
+   "Five Short Stories..."
+   unless the user specifically asks about the PDF.
+13. Never add information from your own knowledge.
 
-    if any(word in q for word in summary_words):
+PDF CONTEXT:
+----------------
+{context}
+----------------
 
-        relevant = find_relevant_paragraphs(text, question)
+USER QUESTION:
+{question}
 
-        if not relevant:
-            relevant = [text[:1500]]
+Now give ONLY the final answer.
+"""
 
-        if language == "hindi":
-            return (
-                "इस PDF के अनुसार मुख्य बात यह है:\n\n"
-                + " ".join(relevant)[:1200]
-            )
-
-        if language == "hinglish":
-            return (
-                "Is PDF ke according main baat ye hai:\n\n"
-                + " ".join(relevant)[:1200]
-            )
-
-        return (
-            "The main point from the PDF is:\n\n"
-            + " ".join(relevant)[:1200]
+    try:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            "models/gemini-2.5-flash:generateContent"
+            f"?key={api_key}"
         )
 
-    # --------------------------------------------------
-    # GENERAL QUESTIONS
-    # --------------------------------------------------
+        response = requests.post(
+            url,
+            headers={
+                "Content-Type": "application/json"
+            },
+            json={
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 300
+                }
+            },
+            timeout=60
+        )
 
-    relevant = find_relevant_paragraphs(text, question)
+        data = response.json()
 
-    if not relevant:
-        if language == "hindi":
-            return "इस PDF में आपके सवाल से संबंधित जानकारी नहीं मिली।"
+        if not response.ok:
+            raise Exception(
+                data.get("error", {}).get(
+                    "message",
+                    "Gemini request failed."
+                )
+            )
 
-        if language == "hinglish":
-            return "Is PDF me aapke question se related information nahi mili."
+        answer = (
+            data["candidates"][0]["content"]["parts"][0]["text"]
+            .strip()
+        )
 
-        return "I couldn't find information related to your question in the PDF."
+        return answer
 
-    # Return ONLY the most relevant paragraph,
-    # not the top 3 paragraphs.
-    answer = relevant[0]
-
-    # Prevent excessively long answers
-    if len(answer) > 1200:
-        answer = answer[:1200].rsplit(" ", 1)[0] + "..."
-
-    return answer
+    except Exception as error:
+        return f"AI answer generate nahi ho paya: {str(error)}"
