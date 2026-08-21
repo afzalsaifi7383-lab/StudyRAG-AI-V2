@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StudyRAG-AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">S</div>
+        <div>
+          <div class="brand-name">StudyRAG-AI</div>
+          <div class="brand-sub">Your PDF Study Assistant</div>
+        </div>
+      </div>
+
+      <div class="sidebar-card">
+        <div class="mini-label">KNOWLEDGE BASE</div>
+        <div id="fileName" class="file-name">No PDF uploaded</div>
+        <div id="fileStatus" class="status muted">Upload a PDF to begin</div>
+      </div>
+
+      <div class="sidebar-info">
+        <div class="info-row"><span>✓</span> Answers from your PDF</div>
+        <div class="info-row"><span>✓</span> Fast question answering</div>
+        <div class="info-row"><span>✓</span> Works on mobile & desktop</div>
+      </div>
+
+      <div class="sidebar-footer">StudyRAG-AI v0.1.0</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">AI STUDY WORKSPACE</div>
+          <h1>StudyRAG-AI</h1>
+          <p>Upload your notes and ask questions from the document.</p>
+        </div>
+        <div id="apiBadge" class="api-badge"><span></span> API Connected</div>
+      </header>
+
+      <section class="content">
+        <div class="upload-card">
+          <div class="section-icon">PDF</div>
+          <div class="upload-copy">
+            <h2>Upload your study material</h2>
+            <p>Choose a PDF. StudyRAG-AI will extract its text for question answering.</p>
+            <div class="upload-actions">
+              <label class="upload-btn">
+                <input id="pdfInput" type="file" accept="application/pdf" />
+                Choose PDF
+              </label>
+              <button id="uploadBtn" class="primary-btn" disabled>Upload & Process</button>
+            </div>
+            <div id="uploadMessage" class="message"></div>
+          </div>
+        </div>
+
+        <div class="chat-card">
+          <div class="chat-header">
+            <div>
+              <div class="eyebrow">DOCUMENT CHAT</div>
+              <h2>Ask your PDF</h2>
+            </div>
+            <button id="clearBtn" class="ghost-btn">Clear</button>
+          </div>
+
+          <div id="chat" class="chat">
+            <div class="welcome">
+              <div class="welcome-icon">✦</div>
+              <h3>Ready when you are</h3>
+              <p>Upload a PDF first, then ask something like:</p>
+              <button class="suggestion">“Explain the main topics in this PDF.”</button>
+              <button class="suggestion">“What is a stack?”</button>
+            </div>
+          </div>
+
+          <form id="askForm" class="ask-box">
+            <textarea id="question" rows="1" placeholder="Ask a question about your PDF..." disabled></textarea>
+            <button id="askBtn" class="send-btn" type="submit" disabled>➤</button>
+          </form>
+          <div class="hint">Answers are generated using the currently uploaded PDF.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
