@@ -1,54 +1,86 @@
-import os
-from typing import Optional
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi import UploadFile
-from pypdf import PdfReader
+from backend.app.rag import extract_text_from_pdf, get_answer_from_text
+
+app = FastAPI(title="StudyRAG-AI")
+
+# Allow frontend to connect with backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+document_text = ""
 
 
-def extract_text_from_pdf(file: UploadFile) -> str:
-    """Extract readable text from an uploaded PDF."""
-    reader = PdfReader(file.file)
-
-    pages = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        if text.strip():
-            pages.append(text.strip())
-
-    return "\n\n".join(pages)
+class QuestionRequest(BaseModel):
+    question: str
 
 
-def get_answer_from_text(text: str, question: str) -> str:
-    """
-    Temporary RAG-style search.
-    AI integration will be added in the next step.
-    """
-    if not text.strip():
-        return "PDF me readable text nahi mila."
-
-    question_words = {
-        word.lower()
-        for word in question.split()
-        if len(word) > 2
+@app.get("/")
+def home():
+    return {
+        "status": "success",
+        "message": "StudyRAG-AI is running!"
     }
 
-    paragraphs = text.split("\n\n")
 
-    matches = []
-    for paragraph in paragraphs:
-        score = sum(
-            1 for word in question_words
-            if word in paragraph.lower()
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy"
+    }
+
+
+@app.post("/upload-pdf")
+async def upload_pdf(file: UploadFile = File(...)):
+    global document_text
+
+    # Only PDF files are allowed
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are allowed."
         )
 
-        if score > 0:
-            matches.append((score, paragraph.strip()))
+    # Extract text from PDF
+    document_text = extract_text_from_pdf(file)
 
-    matches.sort(reverse=True, key=lambda item: item[0])
+    # Check if text was extracted
+    if not document_text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract readable text from PDF."
+        )
 
-    if not matches:
-        return "Is PDF me is question se related information nahi mili."
+    return {
+        "status": "success",
+        "message": "PDF uploaded successfully!",
+        "filename": file.filename,
+        "characters": len(document_text)
+    }
 
-    return "\n\n".join(
-        paragraph for _, paragraph in matches[:3]
+
+@app.post("/ask")
+def ask_question(request: QuestionRequest):
+    if not document_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a PDF first."
+        )
+
+    answer = get_answer_from_text(
+        document_text,
+        request.question
     )
+
+    return {
+        "status": "success",
+        "question": request.question,
+        "answer": answer
+    }
